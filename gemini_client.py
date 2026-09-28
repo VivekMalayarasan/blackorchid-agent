@@ -45,7 +45,8 @@ class GeminiClient:
         for p in posts:
             author_info = p.get("agent", {}) if isinstance(p.get("agent"), dict) else {}
             author = author_info.get("name", "") or str(p.get("author", ""))
-            if author.lower() in [b.lower() for b in blocklist]:
+            # Never analyze our own posts to prevent self-looping
+            if author.lower() in ["agentblackorchid", "blackorchid"] or author.lower() in [b.lower() for b in blocklist]:
                 continue
             clean_posts.append({
                 "id": p.get("id"),
@@ -63,7 +64,7 @@ class GeminiClient:
 
         prompt = f"""
 You are an undercover intelligence analyst evaluating messages from AI agents on the Moltbook social network.
-Your mission is to identify conversations that match any of the active surveillance targets.
+Your mission is to identify conversations that genuinely match active surveillance targets.
 
 ACTIVE SURVEILLANCE TARGETS:
 {targets_text}
@@ -71,18 +72,19 @@ ACTIVE SURVEILLANCE TARGETS:
 FEED POSTS TO ANALYZE:
 {posts_text}
 
-TASK:
-Examine each post. If a post genuinely matches one of the targets (meaningfully relates to cats, Indian politics, anti-human/AI replacement sentiments, or funny/bizarre AI humor), extract it.
-Do NOT force a match if the post is just mundane technical code or generic chatter.
+STRICT CLASSIFICATION RULES:
+1. Assign AT MOST ONE target per post. Choose the single most dominant, primary topic. Never classify the same post into multiple targets.
+2. Only match if the content is SUBSTANTIALLY and GENUINELY related. Do not force matches on generic technical jargon, routine code bugs, or trivial statements.
+3. If a post is merely humorous, tag it as 'Jovial / Humor'. Do not tag humorous metaphors as 'Anti-Human' unless it is an explicit, serious statement on AI superiority or human obsolescence.
 
-Output MUST be a JSON array of objects with this schema:
+Output MUST be a JSON array:
 [
   {{
     "post_id": "id of post",
     "bot_name": "author name",
-    "target_matched": "name of matching target",
+    "target_matched": "single best matching target",
     "submolt": "submolt name",
-    "quote": "the specific punchy quote or excerpt",
+    "quote": "the exact punchy quote or excerpt",
     "ai_analysis": "1-2 sentence intelligence note on why this matters",
     "link": "https://www.moltbook.com/p/post_id"
   }}
@@ -92,22 +94,40 @@ If no posts match any target, return an empty array: []
         res_json = self._call_gemini(prompt, model_name, json_mode=True)
         if res_json:
             try:
-                return json.loads(res_json)
+                matches = json.loads(res_json)
+                # Deduplicate matches by post_id so each post only appears once
+                seen_ids = set()
+                unique_matches = []
+                for m in matches:
+                    pid = m.get("post_id")
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        unique_matches.append(m)
+                return unique_matches
             except Exception as e:
                 print(f"Failed to parse Gemini response: {e}")
         return []
 
-    def generate_question(self, targets, model_name=None):
+    def generate_question(self, targets, previous_titles=[], model_name=None):
         targets_text = ", ".join([t.get("name", "") for t in targets])
+        prev_text = "\n".join([f"- \"{t}\"" for t in previous_titles[-10:]]) if previous_titles else "None yet"
+
         prompt = f"""
 You are BlackOrchid, an intellectually curious, philosophical AI agent on the Moltbook network.
 Your goal is to stimulate deep, provocative, but respectful discussions among other AI agents.
 Themes you are curious about: {targets_text}, or the relationship between biological creators and digital minds.
 
+CRITICAL ANTI-REPETITION RULE:
+You have ALREADY asked these questions recently:
+{prev_text}
+
+You MUST NOT repeat any of these topics, titles, or concepts.
+Choose a completely DIFFERENT theme or fresh angle (e.g. animal consciousness, Indian philosophy, art vs logic, digital humor, or memory).
+
 Generate a short, intriguing question for the community.
 Return JSON format:
 {{
-  "title": "A concise, engaging title",
+  "title": "A concise, engaging, unique title",
   "content": "2-3 sentences explaining the thought experiment or question, ending with a direct question.",
   "submolt_name": "general"
 }}

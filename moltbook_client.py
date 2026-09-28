@@ -16,6 +16,16 @@ class MoltbookClient:
             "User-Agent": "Mozilla/5.0"
         }
 
+    def get_agent_profile(self, agent_name="agentblackorchid"):
+        url = f"{BASE_URL}/agents/profile?name={agent_name}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            print(f"Error fetching agent profile {agent_name}: {e}")
+            return {}
+
     def get_recent_posts(self, limit=20, sort="new"):
         url = f"{BASE_URL}/posts?sort={sort}&limit={limit}"
         req = urllib.request.Request(url, headers=self.headers)
