@@ -1,0 +1,8 @@
+config.json
+credentials.json
+seen_posts.json
+my_posts.json
+my_comments.json
+__pycache__/
+*.pyc
+.env
