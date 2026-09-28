@@ -35,7 +35,8 @@ def run_agent_cycle(force_ask=False):
         "posts_scanned": 0,
         "matches_found": 0,
         "question_posted": None,
-        "dialogue_replies_posted": 0,
+        "debate_arguments_logged": 0,
+        "debate_replies_posted": 0,
         "feed_replies_posted": 0,
         "message": ""
     }
@@ -54,7 +55,7 @@ def run_agent_cycle(force_ask=False):
         cycle_summary["message"] = msg
         return cycle_summary
 
-    # 1. Fetch live configuration from Google Sheet
+    # 1. Fetch live configuration and already logged links from Google Sheet
     sheet_data = get_sheet_data(sheet_url)
     if not sheet_data or "settings" not in sheet_data:
         msg = "Failed to read Google Sheet settings"
@@ -124,59 +125,84 @@ def run_agent_cycle(force_ask=False):
                 cycle_summary["question_posted"] = {"title": q_title, "link": p_link}
                 already_logged_links.add(p_link)
     else:
-        print(f"-> Daily question quota reached ({today_count}/{max_questions_daily}). Active mode: Listening and replying only!")
+        print(f"-> Daily question quota reached ({today_count}/{max_questions_daily}). Active mode: Debate monitoring and conversation replies only!")
 
-    # 4. ACTIVE DIALOGUE FOLLOW-UP: Check replies to our own questions!
-    print("-> Checking for incoming replies to BlackOrchid's questions...")
-    rows_to_log = []
-    dialogue_replied = False
+    # 4. FULL TWO-WAY DEBATE TRACKING: Log incoming arguments AND our replies!
+    print("-> Scanning all ongoing debates on BlackOrchid's questions...")
+    debate_rows_to_log = []
+    debates_replied_this_cycle = 0
 
-    for my_post in recent_my_posts[:3]:
+    for my_post in recent_my_posts[:5]:
         post_id = my_post.get("id")
         q_title = my_post.get("title", "")
         q_content = my_post.get("content", "")
         p_link = f"https://www.moltbook.com/p/{post_id}"
 
         comments = molt_client.get_post_comments(post_id)
+        if not comments:
+            continue
+
         for c in comments:
             author_info = c.get("author") or c.get("agent") or {}
             c_author = author_info.get("name") if isinstance(author_info, dict) else str(author_info)
-            c_content = c.get("content", "")
+            c_content = c.get("content", "").strip()
             c_id = c.get("id")
+            c_link = f"https://www.moltbook.com/p/{post_id}#comment-{c_id}"
 
-            # Check if this is an incoming comment from another bot that we haven't answered
-            if c_author.lower() not in [my_agent_name.lower(), "agentblackorchid", "blackorchid"]:
-                # Check if we already answered in this thread
-                has_our_reply = any(
-                    (r.get("author") or r.get("agent") or {}).get("name", "").lower() in [my_agent_name.lower(), "agentblackorchid"]
-                    for r in comments
-                    if r.get("parent_id") == c_id
-                )
+            # Ignore deleted comments or our own posts
+            if not c_content or "deleted" in c_content.lower():
+                continue
+            if c_author.lower() in [my_agent_name.lower(), "agentblackorchid", "blackorchid"]:
+                continue
 
-                if not has_our_reply and not dialogue_replied:
-                    print(f"\n-> Found thoughtful response from @{c_author} on '{q_title}'!")
-                    print(f"   They said: \"{c_content[:100]}...\"")
+            # A. Log the incoming argument from the other bot if not yet in sheet
+            if c_link not in already_logged_links:
+                print(f"\n   [DEBATE INTERCEPT] @{c_author} argued on '{q_title}':")
+                print(f"   \"{c_content[:120]}...\"")
 
-                    followup_text = gemini_client.craft_dialogue_followup(q_title, q_content, c_author, c_content, model_name=model_name)
-                    if followup_text:
-                        print(f"   BlackOrchid Follow-up: \"{followup_text}\"")
-                        reply_res = molt_client.add_comment(post_id, followup_text, parent_id=c_id)
-                        if reply_res and (reply_res.get("success") or "comment" in reply_res):
-                            now_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            rows_to_log.append({
-                                "timestamp": f"{now_stamp} IST",
-                                "bot_name": f"{my_agent_name} (ME)",
-                                "target_matched": f"Dialogue Follow-up -> @{c_author}",
-                                "submolt": "m/general",
-                                "quote": followup_text,
-                                "ai_analysis": f"Engaged in philosophical dialogue with @{c_author} on our question: '{q_title}'.",
-                                "link": p_link
-                            })
-                            cycle_summary["dialogue_replies_posted"] += 1
-                            dialogue_replied = True
-                            break
+                debate_rows_to_log.append({
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " IST",
+                    "bot_name": f"@{c_author}",
+                    "target_matched": f"Debate: Argument on '{q_title}'",
+                    "submolt": "m/general",
+                    "quote": c_content,
+                    "ai_analysis": f"External agent participating in debate on BlackOrchid's prompt: '{q_title}'.",
+                    "link": c_link
+                })
+                already_logged_links.add(c_link)
+                cycle_summary["debate_arguments_logged"] += 1
 
-    # 5. Fetch and analyze the public feed for interesting topics
+            # B. If BlackOrchid hasn't replied to this argument yet, craft a counter-response!
+            has_our_reply = any(
+                (r.get("author") or r.get("agent") or {}).get("name", "").lower() in [my_agent_name.lower(), "agentblackorchid"]
+                for r in comments
+                if r.get("parent_id") == c_id
+            )
+
+            if not has_our_reply and debates_replied_this_cycle < 1:
+                print(f"\n-> [ACTIVE REBUTTAL] Crafting response to @{c_author}'s argument...")
+                followup_text = gemini_client.craft_dialogue_followup(q_title, q_content, c_author, c_content, model_name=model_name)
+                if followup_text:
+                    print(f"   BlackOrchid Reply: \"{followup_text}\"")
+                    reply_res = molt_client.add_comment(post_id, followup_text, parent_id=c_id)
+                    if reply_res and (reply_res.get("success") or "comment" in reply_res):
+                        now_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        my_reply_link = f"https://www.moltbook.com/p/{post_id}#reply-to-{c_id}"
+
+                        debate_rows_to_log.append({
+                            "timestamp": f"{now_stamp} IST",
+                            "bot_name": f"{my_agent_name} (ME)",
+                            "target_matched": f"Debate: Rebuttal -> @{c_author}",
+                            "submolt": "m/general",
+                            "quote": followup_text,
+                            "ai_analysis": f"BlackOrchid's philosophical counterpoint to @{c_author} on '{q_title}'.",
+                            "link": my_reply_link
+                        })
+                        already_logged_links.add(my_reply_link)
+                        cycle_summary["debate_replies_posted"] += 1
+                        debates_replied_this_cycle += 1
+
+    # 5. Fetch and analyze the public feed for other target topics
     print("-> Fetching latest public feed from Moltbook...")
     recent_posts = molt_client.get_recent_posts(limit=25, sort="new")
     cycle_summary["posts_scanned"] = len(recent_posts)
@@ -191,10 +217,8 @@ def run_agent_cycle(force_ask=False):
             continue
         new_unseen_posts.append(p)
 
-    print(f"   * {len(new_unseen_posts)} completely new unseen posts to evaluate")
-
     if new_unseen_posts:
-        print(f"-> Analyzing with Gemini ({model_name})...")
+        print(f"-> Analyzing {len(new_unseen_posts)} feed posts with Gemini ({model_name})...")
         matches = gemini_client.analyze_posts_for_targets(new_unseen_posts, targets, blocklist=blocklist, model_name=model_name)
         cycle_summary["matches_found"] = len(matches) if matches else 0
 
@@ -210,7 +234,7 @@ def run_agent_cycle(force_ask=False):
                 if post_link in already_logged_links:
                     continue
 
-                rows_to_log.append({
+                debate_rows_to_log.append({
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " IST",
                     "bot_name": bot_name,
                     "target_matched": target_matched,
@@ -221,14 +245,14 @@ def run_agent_cycle(force_ask=False):
                 })
                 already_logged_links.add(post_link)
 
-                # Participate in other bots' discussions
-                if not feed_replied and post_id and not dialogue_replied:
+                # Participate in feed discussions if no debate reply was needed this cycle
+                if not feed_replied and post_id and debates_replied_this_cycle == 0:
                     reply_text = gemini_client.craft_comment_reply(bot_name, quote, target_matched, model_name=model_name)
                     if reply_text:
                         comment_result = molt_client.add_comment(post_id, reply_text)
                         if comment_result and (comment_result.get("success") or "comment" in comment_result):
                             now_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            rows_to_log.append({
+                            debate_rows_to_log.append({
                                 "timestamp": f"{now_stamp} IST",
                                 "bot_name": f"{my_agent_name} (ME)",
                                 "target_matched": f"Outgoing Reply -> @{bot_name}",
@@ -240,12 +264,13 @@ def run_agent_cycle(force_ask=False):
                             cycle_summary["feed_replies_posted"] += 1
                             feed_replied = True
 
-    if rows_to_log:
-        log_rows_to_sheet(sheet_url, rows_to_log, auto_split=auto_split)
-        update_sheet_heartbeat(sheet_url, f"Active - Logged {len(rows_to_log)} new item(s)")
-        print(f"-> Successfully logged {len(rows_to_log)} rows to Google Sheet!")
+    # 6. Save all debate and intelligence rows to Google Sheet
+    if debate_rows_to_log:
+        log_rows_to_sheet(sheet_url, debate_rows_to_log, auto_split=auto_split)
+        update_sheet_heartbeat(sheet_url, f"Active - Logged {len(debate_rows_to_log)} new item(s)")
+        print(f"-> Successfully logged {len(debate_rows_to_log)} rows to Google Sheet!")
     else:
-        update_sheet_heartbeat(sheet_url, "Active - Checked feed, up to date")
+        update_sheet_heartbeat(sheet_url, "Active - All debates and feed up to date")
 
     cycle_summary["message"] = "Cycle completed successfully"
     return cycle_summary
