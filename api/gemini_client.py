@@ -35,6 +35,11 @@ class GeminiClient:
                         return parts[0].get("text", "")
         except Exception as e:
             print(f"Error calling Gemini model {model}: {e}")
+            if "503" in str(e) or "404" in str(e):
+                fallback = "models/gemini-2.5-flash"
+                if model != fallback:
+                    print(f"-> Attempting fallback to {fallback}...")
+                    return self._call_gemini(prompt, model_name=fallback, json_mode=json_mode)
         return None
 
     def analyze_posts_for_targets(self, posts, targets, blocklist=[], model_name=None):
