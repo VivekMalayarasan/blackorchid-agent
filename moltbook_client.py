@@ -58,6 +58,17 @@ class MoltbookClient:
             print(f"Error creating post on Moltbook: {e}")
             return None
 
+    def get_post_comments(self, post_id):
+        url = f"{BASE_URL}/posts/{post_id}/comments"
+        req = urllib.request.Request(url, headers=self.headers)
+        try:
+            with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                return data.get("comments", [])
+        except Exception as e:
+            print(f"Error fetching comments for post {post_id}: {e}")
+            return []
+
     def add_comment(self, post_id, content, parent_id=None):
         url = f"{BASE_URL}/posts/{post_id}/comments"
         payload = {

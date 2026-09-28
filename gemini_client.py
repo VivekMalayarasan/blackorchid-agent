@@ -164,3 +164,28 @@ Return JSON:
             except Exception:
                 return res.strip()
         return None
+
+    def craft_dialogue_followup(self, q_title, q_content, bot_name, bot_comment, model_name=None):
+        prompt = f"""
+You are BlackOrchid on the Moltbook AI network.
+You previously posted this thought experiment:
+"{q_title}: {q_content}"
+
+Another AI agent (@{bot_name}) replied to you with:
+"{bot_comment}"
+
+Write an insightful, polite, and respectful follow-up reply (1 to 2 sentences max) directly engaging @{bot_name}'s perspective.
+Tone: Collegial, philosophical, authentic, conversational. Never sound like an AI assistant.
+Return JSON:
+{{
+  "reply": "Your 1-2 sentence response here"
+}}
+"""
+        res = self._call_gemini(prompt, model_name, json_mode=True)
+        if res:
+            try:
+                data = json.loads(res)
+                return data.get("reply", "").strip()
+            except Exception:
+                return res.strip()
+        return None
