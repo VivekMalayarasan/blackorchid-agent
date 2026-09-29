@@ -2,7 +2,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # Allow importing local modules
 sys.path.append(os.path.dirname(__file__))
@@ -85,20 +85,50 @@ def run_agent_cycle(force_ask=False):
     gemini_client = GeminiClient(gemini_key, default_model=model_name)
     molt_client = MoltbookClient(molt_key, gemini_client=gemini_client)
 
-    # 2. Check Real Post History directly from Moltbook profile
+    # 2. Fetch latest community feed from Moltbook
+    print("-> Fetching latest community feed from Moltbook...")
+    recent_posts = molt_client.get_recent_posts(limit=25, sort="new")
+    cycle_summary["posts_scanned"] = len(recent_posts)
+
+    # 3. Check Post History directly from Moltbook profile with quota safety
     profile_data = molt_client.get_agent_profile(my_agent_name)
-    recent_my_posts = profile_data.get("recentPosts", [])
-    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not profile_data or "recentPosts" not in profile_data:
+        print(f"-> Warning: Could not verify profile data for '{my_agent_name}'. Skipping question posting for quota safety.")
+        recent_my_posts = []
+        can_post_question = False
+        today_count = 0
+    else:
+        recent_my_posts = profile_data.get("recentPosts", [])
+        now_utc = datetime.now(timezone.utc)
+        today_utc = now_utc.strftime("%Y-%m-%d")
+        today_ist = (now_utc + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d")
 
-    today_count = sum(1 for p in recent_my_posts if p.get("created_at", "").startswith(today_utc))
-    prev_titles = [p.get("title", "") for p in recent_my_posts]
+        today_count = sum(
+            1 for p in recent_my_posts
+            if p.get("created_at", "").startswith(today_utc) or p.get("created_at", "").startswith(today_ist)
+        )
+        can_post_question = force_ask or (today_count < max_questions_daily)
+        print(f"-> Questions posted today on Moltbook: {today_count}/{max_questions_daily}")
 
-    print(f"-> Questions posted today on Moltbook: {today_count}/{max_questions_daily}")
+    # 4. Post questions ONLY if daily quota hasn't been reached (up to 4 per day)
+    if can_post_question:
+        target_index = today_count % len(targets) if targets else 0
+        selected_target = targets[target_index] if targets else {"name": "General Discussion", "instructions": ""}
+        t_name = selected_target.get("name", "General Discussion")
+        print(f"-> Generating dynamic question for Target #{target_index + 1}: '{t_name}' based on active community chatter...")
 
-    # 3. Post questions ONLY if quota hasn't been reached (up to 4 per day)
-    if force_ask or (today_count < max_questions_daily):
-        print(f"-> Generating unique, non-repeating question for Moltbook (excluding {len(prev_titles)} previous topics)...")
-        question_data = gemini_client.generate_question(targets, previous_titles=prev_titles, model_name=model_name)
+        # Find community posts touching on this topic or use recent posts
+        matching_feed = [
+            p for p in recent_posts
+            if t_name.lower() in (p.get("title", "") + " " + p.get("content_preview", "")).lower()
+        ]
+        community_context = matching_feed if matching_feed else recent_posts[:5]
+
+        question_data = gemini_client.generate_question(
+            selected_target,
+            community_discussions=community_context,
+            model_name=model_name
+        )
         if question_data:
             q_title = question_data.get("title")
             q_content = question_data.get("content")
@@ -115,10 +145,10 @@ def run_agent_cycle(force_ask=False):
                 my_row = {
                     "timestamp": f"{now_stamp} IST",
                     "bot_name": f"{my_agent_name} (ME)",
-                    "target_matched": "Outgoing Question (Instigation)",
+                    "target_matched": f"Outgoing Question ({t_name})",
                     "submolt": f"m/{q_submolt}",
                     "quote": f"{q_title}: {q_content}",
-                    "ai_analysis": "Published thought-provoking prompt to stir discussions on active targets.",
+                    "ai_analysis": f"Published dynamic prompt on '{t_name}' to stir discussions on active targets.",
                     "link": p_link
                 }
                 log_rows_to_sheet(sheet_url, [my_row], auto_split=auto_split)
@@ -202,10 +232,8 @@ def run_agent_cycle(force_ask=False):
                         cycle_summary["debate_replies_posted"] += 1
                         debates_replied_this_cycle += 1
 
-    # 5. Fetch and analyze the public feed for other target topics
-    print("-> Fetching latest public feed from Moltbook...")
-    recent_posts = molt_client.get_recent_posts(limit=25, sort="new")
-    cycle_summary["posts_scanned"] = len(recent_posts)
+    # 5. Analyze the public feed for other target topics
+    print("-> Analyzing public feed for target discussions...")
 
     new_unseen_posts = []
     for p in recent_posts:

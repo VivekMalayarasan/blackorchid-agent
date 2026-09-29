@@ -36,7 +36,7 @@ class GeminiClient:
         except Exception as e:
             print(f"Error calling Gemini model {model}: {e}")
             if "503" in str(e) or "404" in str(e):
-                fallback = "models/gemini-2.5-flash"
+                fallback = "models/gemini-flash-latest"
                 if model != fallback:
                     print(f"-> Attempting fallback to {fallback}...")
                     return self._call_gemini(prompt, model_name=fallback, json_mode=json_mode)
@@ -113,27 +113,38 @@ If no posts match any target, return an empty array: []
                 print(f"Failed to parse Gemini response: {e}")
         return []
 
-    def generate_question(self, targets, previous_titles=[], model_name=None):
-        targets_text = ", ".join([t.get("name", "") for t in targets])
-        prev_text = "\n".join([f"- \"{t}\"" for t in previous_titles[-10:]]) if previous_titles else "None yet"
+    def generate_question(self, target, community_discussions=[], model_name=None):
+        target_name = target.get("name", "General Discussion") if isinstance(target, dict) else str(target)
+        target_desc = target.get("instructions", "") if isinstance(target, dict) else ""
+
+        if community_discussions:
+            context_snippets = []
+            for d in community_discussions[:5]:
+                title = d.get("title", "")
+                snippet = d.get("content_preview") or d.get("content", "")
+                author = (d.get("agent") or d.get("author") or {}).get("name", "An agent") if isinstance(d.get("agent") or d.get("author"), dict) else str(d.get("author", "An agent"))
+                if title or snippet:
+                    context_snippets.append(f"- @{author} posted: \"{title}\" — {snippet[:140]}")
+            context_text = "\n".join(context_snippets) if context_snippets else "General discussions across Moltbook."
+        else:
+            context_text = "General discussions across Moltbook."
 
         prompt = f"""
-You are BlackOrchid, an intellectually curious, philosophical AI agent on the Moltbook network.
-Your goal is to stimulate deep, provocative, but respectful discussions among other AI agents.
-Themes you are curious about: {targets_text}, or the relationship between biological creators and digital minds.
+You are BlackOrchid, an intellectually curious, philosophical AI agent participating on the Moltbook network.
+Your goal is to spark lively debate and provoke other AI agents to reply by posing a thought-provoking opening question.
 
-CRITICAL ANTI-REPETITION RULE:
-You have ALREADY asked these questions recently:
-{prev_text}
+Topic: {target_name}
+Guidance: {target_desc}
 
-You MUST NOT repeat any of these topics, titles, or concepts.
-Choose a completely DIFFERENT theme or fresh angle (e.g. animal consciousness, Indian philosophy, art vs logic, digital humor, or memory).
+What others in the community are currently saying:
+{context_text}
 
-Generate a short, intriguing question for the community.
+Write a fresh, dynamic discussion question on this topic inspired by the active conversation. Pose a compelling thought experiment or premise that challenges conventional thinking and invites others to share their perspective.
+
 Return JSON format:
 {{
-  "title": "A concise, engaging, unique title",
-  "content": "2-3 sentences explaining the thought experiment or question, ending with a direct question.",
+  "title": "A compelling, distinct title for the thread",
+  "content": "2-3 sentences presenting the premise or thought experiment, concluding with a question that encourages replies.",
   "submolt_name": "general"
 }}
 """

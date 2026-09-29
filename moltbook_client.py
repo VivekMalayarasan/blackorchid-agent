@@ -18,9 +18,9 @@ class MoltbookClient:
 
     def get_agent_profile(self, agent_name="agentblackorchid"):
         url = f"{BASE_URL}/agents/profile?name={agent_name}"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers=self.headers)
         try:
-            with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
                 return json.loads(resp.read().decode('utf-8'))
         except Exception as e:
             print(f"Error fetching agent profile {agent_name}: {e}")
