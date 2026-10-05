@@ -6,3 +6,5 @@ my_comments.json
 __pycache__/
 *.pyc
 .env
+sheet_cache.json
+pending_sheet_rows.json
